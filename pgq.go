@@ -25,7 +25,7 @@ const (
 )
 
 type Client struct {
-	executor *executor
+	executor executor
 }
 
 func NewClient(conn string, txEnabled bool) (*Client, error) {
@@ -34,7 +34,15 @@ func NewClient(conn string, txEnabled bool) (*Client, error) {
 		log.Printf("Failed to initialize db connection %s: %v", conn, err)
 		return nil, err
 	}
-	return &Client{&executor{db, txEnabled, &sync.Mutex{}, nil}}, nil
+
+	var exec executor
+	if txEnabled {
+		exec = &txExecutor{db, &sync.Mutex{}, nil}
+	} else {
+		exec = &simpleExecutor{db}
+	}
+
+	return &Client{exec}, nil
 }
 
 func (c *Client) CreateQueue(name string) (int, error) {
@@ -67,28 +75,28 @@ type QueueInfo struct {
 }
 
 func (c *Client) GetQueueInfo(name string) (*QueueInfo, error) {
-	rows, err := c.executor.executeQuery(getQueueInfoQuery, name)
+	resolverFunc := func(rows *sql.Rows) (interface{}, error) {
+		var result QueueInfo
+		for rows.Next() {
+			err := rows.Scan(
+				&result.QueueName,
+				&result.QueueSwitchTime,
+				&result.QueueRotationPeriodSecs,
+				&result.QueueTickerMaxLagSecs,
+				&result.LastTickID,
+			)
+			if err != nil {
+				fmt.Println(err)
+				err := fmt.Errorf("error while scanning row: %v", err)
+				return nil, err
+			}
+		}
+		return result, nil
+	}
+	result, err := c.executor.executeQuery(resolverFunc, getQueueInfoQuery, name)
 	if err != nil {
-		c.executor.closeError(rows)
 		return nil, err
 	}
 
-	var result QueueInfo
-	for rows.Next() {
-		err = rows.Scan(
-			&result.QueueName,
-			&result.QueueSwitchTime,
-			&result.QueueRotationPeriodSecs,
-			&result.QueueTickerMaxLagSecs,
-			&result.LastTickID,
-		)
-		if err != nil {
-			fmt.Println(err)
-			err := fmt.Errorf("error while scanning row: %v", err)
-			c.executor.closeError(rows)
-			return nil, err
-		}
-	}
-	c.executor.closeSuccess(rows)
-	return &result, nil
+	return &(result.(QueueInfo)), nil
 }

@@ -16,7 +16,7 @@ const (
 )
 
 type Consumer struct {
-	executor *executor
+	executor executor
 	Queue    string
 	Name     string
 }
@@ -27,7 +27,15 @@ func NewConsumer(conn string, txEnabled bool, queue string, name string) (*Consu
 		log.Printf("Failed to initialize db connection %s: %v", conn, err)
 		return nil, err
 	}
-	return &Consumer{&executor{db, txEnabled, &sync.Mutex{}, nil}, queue, name}, nil
+
+	var exec executor
+	if txEnabled {
+		exec = &txExecutor{db, &sync.Mutex{}, nil}
+	} else {
+		exec = &simpleExecutor{db}
+	}
+
+	return &Consumer{exec, queue, name}, nil
 }
 
 func (c *Consumer) Register() (int, error) {

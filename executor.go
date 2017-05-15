@@ -6,69 +6,89 @@ import (
 	"sync"
 )
 
-type executor struct {
+type ResolverFunc func(rows *sql.Rows) (interface{}, error)
+
+var intResolverFunc = func(rows *sql.Rows) (interface{}, error) {
+	var result int
+	for rows.Next() {
+		err := rows.Scan(&result)
+		if err != nil {
+			err := fmt.Errorf("error while scanning row: %v", err)
+			rows.Close()
+			return 0, err
+		}
+	}
+	return result, nil
+}
+
+type executor interface {
+	executeIntQuery(query string, args ...interface{}) (int, error)
+	executeQuery(resolverFunc ResolverFunc, query string, args ...interface{}) (interface{}, error)
+}
+
+type simpleExecutor struct {
+	db *sql.DB
+}
+
+func (e *simpleExecutor) executeIntQuery(query string, args ...interface{}) (int, error) {
+	result, err := e.executeQuery(intResolverFunc, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.(int), nil
+}
+
+func (e *simpleExecutor) executeQuery(resolverFunc ResolverFunc, query string, args ...interface{}) (interface{}, error) {
+	rows, err := e.db.Query(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	return resolverFunc(rows)
+}
+
+type txExecutor struct {
 	db        *sql.DB
-	tx        bool
 	txMutex   *sync.Mutex
 	currentTx *sql.Tx
 }
 
-func (e *executor) executeIntQuery(query string, args ...interface{}) (int, error) {
-	rows, err := e.executeQuery(query, args...)
+func (e *txExecutor) executeIntQuery(query string, args ...interface{}) (int, error) {
+	result, err := e.executeQuery(intResolverFunc, query, args...)
 	if err != nil {
-		e.closeError(rows)
 		return 0, err
 	}
-
-	var result int
-	for rows.Next() {
-		err = rows.Scan(&result)
-		if err != nil {
-			err := fmt.Errorf("error while scanning row: %v", err)
-			e.closeError(rows)
-			return 0, err
-		}
-	}
-	e.closeSuccess(rows)
-
-	return result, nil
+	return result.(int), nil
 }
 
-func (e *executor) executeQuery(query string, args ...interface{}) (*sql.Rows, error) {
+func (e *txExecutor) executeQuery(resolverFunc ResolverFunc, query string, args ...interface{}) (interface{}, error) {
 	e.txMutex.Lock()
-	defer e.txMutex.Unlock()
-
-	if e.tx {
-		fmt.Println("starting tx")
-
-		tx, err := e.db.Begin()
-		if err != nil {
-			return nil, err
+	defer func() {
+		e.txMutex.Unlock()
+		if e.currentTx != nil {
+			e.currentTx = nil
 		}
-		e.currentTx = tx
-		return tx.Query(query, args...)
-	}
-	return e.db.Query(query, args...)
-}
+	}()
 
-func (e *executor) closeSuccess(rows *sql.Rows) {
-	rows.Close()
-	if e.tx {
-		err := e.currentTx.Commit()
-		if err != nil {
-			fmt.Println(err)
-		}
-		e.currentTx = nil
+	tx, err := e.db.Begin()
+	if err != nil {
+		return nil, err
 	}
-}
+	e.currentTx = tx
 
-func (e *executor) closeError(rows *sql.Rows) {
-	rows.Close()
-	if e.tx {
-		err := e.currentTx.Rollback()
-		if err != nil {
-			fmt.Println(err)
-		}
-		e.currentTx = nil
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
 	}
+	defer rows.Close()
+
+	result, err := resolverFunc(rows)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	tx.Commit()
+	return result, nil
 }
