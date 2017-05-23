@@ -8,10 +8,10 @@ import (
 	pgq "github.com/enrichman/go-pgq"
 )
 
-func Test_Load(t *testing.T) {
+func Test_Connection(t *testing.T) {
 	connString := "postgres://postgres:password@localhost:5432?sslmode=disable"
-
 	client, err := pgq.NewClient(connString, true)
+
 	fmt.Println(client, err)
 
 	res, err := client.CreateQueue("js")

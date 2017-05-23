@@ -98,5 +98,6 @@ func (c *Client) GetQueueInfo(name string) (*QueueInfo, error) {
 		return nil, err
 	}
 
-	return &(result.(QueueInfo)), nil
+	qi := result.(QueueInfo)
+	return &qi, nil
 }
