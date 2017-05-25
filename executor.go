@@ -22,12 +22,17 @@ var intResolverFunc = func(rows *sql.Rows) (interface{}, error) {
 }
 
 type executor interface {
+	DB() *sql.DB
 	executeIntQuery(query string, args ...interface{}) (int, error)
 	executeQuery(resolverFunc ResolverFunc, query string, args ...interface{}) (interface{}, error)
 }
 
 type simpleExecutor struct {
 	db *sql.DB
+}
+
+func (e *simpleExecutor) DB() *sql.DB {
+	return e.db
 }
 
 func (e *simpleExecutor) executeIntQuery(query string, args ...interface{}) (int, error) {
@@ -51,6 +56,10 @@ type txExecutor struct {
 	db        *sql.DB
 	txMutex   *sync.Mutex
 	currentTx *sql.Tx
+}
+
+func (e *txExecutor) DB() *sql.DB {
+	return e.db
 }
 
 func (e *txExecutor) executeIntQuery(query string, args ...interface{}) (int, error) {

@@ -12,41 +12,73 @@ import (
 )
 
 const (
-	createQueueQuery  = `SELECT pgq.create_queue($1)`
-	getQueueInfoQuery = `
-	SELECT
-		queue_name,
-		queue_switch_time,
-		EXTRACT(EPOCH FROM queue_rotation_period),
-		EXTRACT(EPOCH FROM queue_ticker_max_lag),
-		last_tick_id
-	FROM
-		pgq.get_queue_info($1)`
+	createQueueQuery        = `SELECT pgq.create_queue($1)`
+	registerConsumerQuery   = `SELECT register_consumer FROM pgq.register_consumer($1, $2)`
+	unregisterConsumerQuery = `SELECT unregister_consumer FROM pgq.unregister_consumer($1, $2)`
+	nextBatchQuery          = `SELECT next_batch FROM pgq.next_batch($1, $2)`
+	getQueueInfoQuery       = `
+		SELECT
+			queue_name,
+			queue_switch_time,
+			EXTRACT(EPOCH FROM queue_rotation_period),
+			EXTRACT(EPOCH FROM queue_ticker_max_lag),
+			last_tick_id
+		FROM
+			pgq.get_queue_info($1)`
 )
+
+type ClientOptionSetter func(*Client) error
+
+func WithTxEnabled(enable bool) ClientOptionSetter {
+	return func(c *Client) error {
+		c.enableTx(enable)
+		return nil
+	}
+}
 
 type Client struct {
 	executor executor
 }
 
-func NewClient(conn string, txEnabled bool) (*Client, error) {
+func NewClient(conn string, opts ...ClientOptionSetter) (*Client, error) {
 	db, err := sql.Open("postgres", conn)
 	if err != nil {
 		log.Printf("Failed to initialize db connection %s: %v", conn, err)
 		return nil, err
 	}
 
-	var exec executor
-	if txEnabled {
-		exec = &txExecutor{db, &sync.Mutex{}, nil}
-	} else {
-		exec = &simpleExecutor{db}
+	client := &Client{&simpleExecutor{db}}
+	for _, opt := range opts {
+		if err = opt(client); err != nil {
+			return nil, err
+		}
 	}
 
-	return &Client{exec}, nil
+	return client, nil
+}
+
+func (c *Client) enableTx(enable bool) {
+	if enable {
+		c.executor = &txExecutor{c.executor.DB(), &sync.Mutex{}, nil}
+	} else {
+		c.executor = &simpleExecutor{c.executor.DB()}
+	}
 }
 
 func (c *Client) CreateQueue(name string) (int, error) {
 	return c.executor.executeIntQuery(createQueueQuery, name)
+}
+
+func (c *Client) RegisterConsumer(queue, name string) (int, error) {
+	return c.executor.executeIntQuery(registerConsumerQuery, queue, name)
+}
+
+func (c *Client) UnregisterConsumer(queue, name string) (int, error) {
+	return c.executor.executeIntQuery(unregisterConsumerQuery, queue, name)
+}
+
+func (c *Client) NextBatch(queue, name string) (int, error) {
+	return c.executor.executeIntQuery(nextBatchQuery, queue, name)
 }
 
 /*

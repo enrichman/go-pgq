@@ -10,7 +10,7 @@ import (
 
 func Test_Connection(t *testing.T) {
 	connString := "postgres://postgres:password@localhost:5432?sslmode=disable"
-	client, err := pgq.NewClient(connString, true)
+	client, err := pgq.NewClient(connString, pgq.WithTxEnabled(true))
 
 	fmt.Println(client, err)
 
@@ -19,7 +19,6 @@ func Test_Connection(t *testing.T) {
 	queueInfo, err := client.GetQueueInfo("js")
 	fmt.Printf("queueInfo %+v %+v\n", queueInfo, err)
 
-	consumer, err := pgq.NewConsumer(connString, true, "notifications", "consumer")
-	batchID, err := consumer.NextBatch()
+	batchID, err := client.NextBatch("notifications", "consumer")
 	fmt.Println("batch", batchID, err)
 }
